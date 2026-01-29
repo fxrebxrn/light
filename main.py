@@ -37,9 +37,3 @@ async def on_startup(dispatcher):
 
 if __name__ == '__main__':
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
-
-@dp.message_handler(commands=['time'])
-async def get_current_time(message: types.Message):
-    from datetime import datetime
-    now = datetime.now().strftime('%H:%M:%S')
-    await message.answer(f"🕒 Поточний час бота: {now}")
