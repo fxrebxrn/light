@@ -1,39 +1,53 @@
+import asyncio
 from datetime import datetime, timedelta
 from database.db import get_db
+from locales.strings import get_text
 
-async def send_notification(bot, user_id, text):
+async def send_reminder(bot, user_id, company, queue, action, lang):
+    """Надсилає нагадування користувачу"""
+    text = get_text(lang, f'reminder_{action}', company=company, queue=queue)
     try:
         await bot.send_message(user_id, text)
-    except Exception:
-        pass
+    except Exception as e:
+        print(f"Error sending reminder to {user_id}: {e}")
 
 async def rebuild_jobs(bot, scheduler):
+    """Перебудовує всі завдання в планувальнику на основі бази даних"""
     scheduler.remove_all_jobs()
-    now = datetime.now()
-    today = now.strftime('%Y-%m-%d')
     
     with get_db() as conn:
+        # Отримуємо всі графіки на сьогодні та завтра
+        today = datetime.now().strftime('%Y-%m-%d')
         schedules = conn.execute("SELECT * FROM schedules WHERE date >= ?", (today,)).fetchall()
         
         for sched in schedules:
-            company, queue, date_str = sched['company'], sched['queue'], sched['date']
-            off_t = datetime.strptime(f"{date_str} {sched['off_time']}", '%Y-%m-%d %H:%M')
-            on_t = datetime.strptime(f"{date_str} {sched['on_time']}", '%Y-%m-%d %H:%M')
-
-            # Беремо юзерів з черги
-            users = conn.execute("SELECT user_id FROM users WHERE company = ? AND queue = ?", (company, queue)).fetchall()
-
-            for user in users:
-                uid = user['user_id']
-                # Тут можна додати логіку мови для кожного юзера,
-                # але для швидкодії scheduler часто шле універсальні повідомлення або парсить їх окремо.
-                # Для прикладу - простий текст.
-                events = [
-                    (off_t - timedelta(minutes=10), f"⚠️ {queue} ({company}): 10 хв до ВІДКЛЮЧЕННЯ"),
-                    (off_t, f"🔴 {queue} ({company}): Світло ВІДКЛЮЧЕНО"),
-                    (on_t - timedelta(minutes=10), f"⚠️ {queue} ({company}): 10 хв до ВМКНЕННЯ"),
-                    (on_t, f"🟢 {queue} ({company}): Світло ВМКНУТО")
-                ]
-                for run_time, text in events:
-                    if run_time > now:
-                        scheduler.add_job(send_notification, 'date', run_date=run_time, args=[bot, uid, text])
+            date_str = sched['date']
+            
+            # ВИПРАВЛЕННЯ: якщо час 24:00, замінюємо на 23:59
+            off_time_str = sched['off_time'].replace('24:00', '23:59')
+            on_time_str = sched['on_time'].replace('24:00', '23:59')
+            
+            try:
+                off_t = datetime.strptime(f"{date_str} {off_time_str}", '%Y-%m-%d %H:%M')
+                on_t = datetime.strptime(f"{date_str} {on_time_str}", '%Y-%m-%d %H:%M')
+                
+                # Знаходимо користувачів, які підписані на цю чергу
+                users = conn.execute("SELECT u.user_id, p.language FROM users u "
+                                     "JOIN user_prefs p ON u.user_id = p.user_id "
+                                     "WHERE u.company=? AND u.queue=?", 
+                                     (sched['company'], sched['queue'])).fetchall()
+                
+                for user in users:
+                    # Нагадування за 10 хвилин до вимкнення
+                    rem_off = off_t - timedelta(minutes=10)
+                    if rem_off > datetime.now():
+                        scheduler.add_job(send_reminder, 'date', run_date=rem_off, 
+                                          args=[bot, user['user_id'], sched['company'], sched['queue'], 'off', user['language']])
+                    
+                    # Нагадування за 10 хвилин до ввімкнення
+                    rem_on = on_t - timedelta(minutes=10)
+                    if rem_on > datetime.now():
+                        scheduler.add_job(send_reminder, 'date', run_date=rem_on, 
+                                          args=[bot, user['user_id'], sched['company'], sched['queue'], 'on', user['language']])
+            except ValueError as e:
+                print(f"Skipping invalid time format: {e}")
