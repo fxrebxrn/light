@@ -153,6 +153,13 @@ async def delete_sub(call: types.CallbackQuery):
     await call.answer("Видалено")
     await call.message.delete()
 
+@dp.message_handler(commands=['check'])
+async def check_time(message: types.Message):
+    from datetime import datetime
+    import pytz
+    now = datetime.now(pytz.timezone('Europe/Kyiv'))
+    await message.answer(f"Системний час: {datetime.now()}\nКиїв: {now}")
+
 def register_handlers(dp: Dispatcher):
     dp.register_message_handler(start_cmd, commands=['start'])
     dp.register_callback_query_handler(set_language, cb_lang.filter())
@@ -165,3 +172,4 @@ def register_handlers(dp: Dispatcher):
     dp.register_callback_query_handler(save_subscription, cb_menu.filter(action="save"))
     dp.register_callback_query_handler(back_to_comp_selection, text=["back_view", "back_sub"])
     dp.register_callback_query_handler(delete_sub, lambda c: c.data.startswith('del_'))
+
