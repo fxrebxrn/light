@@ -1,3 +1,11 @@
+import collections
+# Милиця для сумісності
+try:
+    import collections.abc
+    collections.Iterable = collections.abc.Iterable
+except ImportError:
+    pass
+
 from aiogram import Bot, Dispatcher, types
 from aiogram.utils import executor
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
