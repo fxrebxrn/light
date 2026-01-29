@@ -1,4 +1,4 @@
-aiohttp>=3.9.0
 aiogram==2.25.2
+aiohttp
 apscheduler==3.10.4
 python-dateutil==2.8.2
