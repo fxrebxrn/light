@@ -25,7 +25,9 @@ def lang_kb():
 def main_menu_kb(lang):
     kb = types.ReplyKeyboardMarkup(resize_keyboard=True)
     kb.row(get_text(lang, 'btn_add_queue'), get_text(lang, 'btn_my_queues'))
-    kb.row(get_text(lang, 'btn_schedules'), get_text(lang, 'btn_settings'))
+    kb.row(get_text(lang, 'btn_schedules'))
+    # ПОВЕРНУТО кнопку Зв'язок (btn_support) та Налаштування
+    kb.row(get_text(lang, 'btn_settings'), get_text(lang, 'btn_support'))
     return kb
 
 def queues_kb(action_type, company, lang):
@@ -39,15 +41,8 @@ def queues_kb(action_type, company, lang):
 # --- Обробники ---
 
 async def check_time_cmd(message: types.Message):
-    """Команда для перевірки реального часу бота"""
-    now_utc = datetime.now()
     now_ua = datetime.now(UA_TZ)
-    await message.answer(
-        f"🕒 <b>Перевірка часу:</b>\n\n"
-        f"Системний (UTC): {now_utc.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"Київський (UA): {now_ua.strftime('%Y-%m-%d %H:%M:%S')}\n"
-        f"Дата для бази: {now_ua.strftime('%Y-%m-%d')}"
-    )
+    await message.answer(f"🕒 <b>Київський час:</b> {now_ua.strftime('%Y-%m-%d %H:%M:%S')}")
 
 async def start_cmd(message: types.Message):
     await message.answer("Оберіть мову / Выберите язык:", reply_markup=lang_kb())
@@ -77,6 +72,10 @@ async def add_queue_btn(message: types.Message):
     kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("ДТЕК", callback_data="scomp_ДТЕК"), types.InlineKeyboardButton("ЦЕК", callback_data="scomp_ЦЕК"))
     await message.answer(get_text(lang, 'choose_comp'), reply_markup=kb)
 
+async def support_cmd(message: types.Message):
+    lang = get_user_lang(message.from_user.id)
+    await message.answer(get_text(lang, 'support_text'))
+
 async def handle_comp_selection(call: types.CallbackQuery):
     lang = get_user_lang(call.from_user.id)
     action, comp = call.data.split("_")
@@ -85,8 +84,12 @@ async def handle_comp_selection(call: types.CallbackQuery):
 
 async def back_to_comp(call: types.CallbackQuery):
     lang = get_user_lang(call.from_user.id)
-    prefix = "vcomp_" if "view" in call.data else "scomp_"
-    kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton("ДТЕК", callback_data=f"{prefix}ДТЕК"), types.InlineKeyboardButton("ЦЕК", callback_data=f"{prefix}ЦЕК"))
+    is_view = "view" in call.data
+    prefix = "vcomp_" if is_view else "scomp_"
+    kb = types.InlineKeyboardMarkup().add(
+        types.InlineKeyboardButton("ДТЕК", callback_data=f"{prefix}ДТЕК"), 
+        types.InlineKeyboardButton("ЦЕК", callback_data=f"{prefix}ЦЕК")
+    )
     await call.message.edit_text(get_text(lang, 'choose_comp'), reply_markup=kb)
     await call.answer()
 
@@ -98,7 +101,8 @@ async def save_sub(call: types.CallbackQuery, callback_data: dict):
             conn.execute("INSERT INTO users (user_id, company, queue) VALUES (?,?,?)", (call.from_user.id, comp, q))
             conn.commit()
             await call.answer(get_text(lang, 'added'), show_alert=True)
-        except: await call.answer(get_text(lang, 'exists'), show_alert=True)
+        except: 
+            await call.answer(get_text(lang, 'exists'), show_alert=True)
     await call.answer()
 
 async def show_sched(call: types.CallbackQuery, callback_data: dict):
@@ -107,16 +111,19 @@ async def show_sched(call: types.CallbackQuery, callback_data: dict):
     today = datetime.now(UA_TZ).strftime('%Y-%m-%d')
     with get_db() as conn:
         rows = conn.execute("SELECT off_time, on_time, created_at FROM schedules WHERE company=? AND queue=? AND date=?", (comp, q, today)).fetchall()
-    if not rows: return await call.answer(get_text(lang, 'no_schedule'), show_alert=True)
+    if not rows: 
+        return await call.answer(get_text(lang, 'no_schedule'), show_alert=True)
     res = "\n".join([f"🔴 {r['off_time']} - 🟢 {r['on_time']}" for r in rows])
-    await call.message.edit_text(get_text(lang, 'schedule_view', company=comp, queue=q, date=today, schedule=res, updated=rows[0]['created_at']), reply_markup=types.InlineKeyboardMarkup().add(types.InlineKeyboardButton(get_text(lang, 'back'), callback_data=f"vcomp_{comp}")))
+    kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton(get_text(lang, 'back'), callback_data=f"vcomp_{comp}"))
+    await call.message.edit_text(get_text(lang, 'schedule_view', company=comp, queue=q, date=today, schedule=res, updated=rows[0]['created_at']), reply_markup=kb)
     await call.answer()
 
 async def my_queues(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     with get_db() as conn:
         rows = conn.execute("SELECT id, company, queue FROM users WHERE user_id=?", (message.from_user.id,)).fetchall()
-    if not rows: return await message.answer(get_text(lang, 'empty_list'))
+    if not rows: 
+        return await message.answer(get_text(lang, 'empty_list'))
     kb = types.InlineKeyboardMarkup()
     for r in rows:
         kb.add(types.InlineKeyboardButton(f"❌ {r['company']} {r['queue']}", callback_data=f"del_{r['id']}"))
@@ -131,13 +138,17 @@ async def delete_sub(call: types.CallbackQuery):
 
 # --- Реєстрація ---
 def register_handlers(dp: Dispatcher):
-    dp.register_message_handler(check_time_cmd, commands=['check']) # Додано команду перевірки
+    dp.register_message_handler(check_time_cmd, commands=['check'])
     dp.register_message_handler(start_cmd, commands=['start'])
     dp.register_callback_query_handler(set_language, cb_lang.filter())
     dp.register_callback_query_handler(show_main_menu, text="menu_start")
+    
+    # Покращені фільтри для текстових кнопок
     dp.register_message_handler(view_schedules_start, lambda m: any(x in m.text.lower() for x in ["графік", "график"]))
     dp.register_message_handler(add_queue_btn, lambda m: any(x in m.text.lower() for x in ["додати", "добавить"]))
     dp.register_message_handler(my_queues, lambda m: any(x in m.text.lower() for x in ["мої чер", "мои оче"]))
+    dp.register_message_handler(support_cmd, lambda m: any(x in m.text.lower() for x in ["зв'язок", "связь", "support"]))
+    
     dp.register_callback_query_handler(handle_comp_selection, lambda c: c.data.startswith(('vcomp_', 'scomp_')))
     dp.register_callback_query_handler(back_to_comp, text=["back_view", "back_sub"])
     dp.register_callback_query_handler(save_sub, cb_menu.filter(action="save"))
