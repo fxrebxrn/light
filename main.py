@@ -1,3 +1,11 @@
+import os
+import time
+
+# Примусове встановлення системної часової зони для всього процесу
+os.environ['TZ'] = 'Europe/Kyiv'
+if hasattr(time, 'tzset'):
+    time.tzset()
+
 import collections
 # Милиця для сумісності
 try:
@@ -37,3 +45,4 @@ async def on_startup(dispatcher):
 
 if __name__ == '__main__':
     executor.start_polling(dp, on_startup=on_startup, skip_updates=True)
+
