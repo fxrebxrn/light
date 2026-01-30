@@ -2,7 +2,9 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from datetime import datetime, timedelta
 import pytz
 from database.db import get_db
-from services.notify import send_notify
+
+# 🔧 ВАЖНО: send_notify лежит в main.py
+from main import send_notify
 
 UA_TZ = pytz.timezone("Europe/Kyiv")
 
@@ -23,8 +25,6 @@ async def rebuild_jobs(bot, scheduler: AsyncIOScheduler):
             off_time = row["off_time"]
             on_time = row["on_time"]
 
-            date_obj = datetime.strptime(date_str, "%Y-%m-%d").date()
-
             off_dt = datetime.strptime(
                 f"{date_str} {off_time}", "%Y-%m-%d %H:%M"
             )
@@ -37,7 +37,9 @@ async def rebuild_jobs(bot, scheduler: AsyncIOScheduler):
 
             notify_dt = off_dt - timedelta(minutes=10)
 
-            if notify_dt > datetime.now(UA_TZ):
+            now = datetime.now(UA_TZ)
+
+            if notify_dt > now:
                 scheduler.add_job(
                     send_notify,
                     "date",
@@ -45,7 +47,7 @@ async def rebuild_jobs(bot, scheduler: AsyncIOScheduler):
                     args=[bot, company, queue, "before"],
                 )
 
-            if off_dt > datetime.now(UA_TZ):
+            if off_dt > now:
                 scheduler.add_job(
                     send_notify,
                     "date",
@@ -53,7 +55,7 @@ async def rebuild_jobs(bot, scheduler: AsyncIOScheduler):
                     args=[bot, company, queue, "off"],
                 )
 
-            if on_dt > datetime.now(UA_TZ):
+            if on_dt > now:
                 scheduler.add_job(
                     send_notify,
                     "date",
