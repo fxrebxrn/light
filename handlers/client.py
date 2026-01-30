@@ -170,15 +170,32 @@ async def my_queues(message: types.Message):
     await message.answer(get_text(lang, 'btn_my_queues'), reply_markup=kb)
 
 async def delete_sub(call: types.CallbackQuery):
+    lang = get_user_lang(call.from_user.id)
     try:
         sub_id = call.data.split("_", 1)[1]
     except Exception:
-        await call.answer("Невірні дані", show_alert=True)
+        await call.answer(get_text(lang, "invalid_data") if "invalid_data" in globals() else "Невірні дані", show_alert=True)
         return
+
     with get_db() as conn:
         conn.execute("DELETE FROM users WHERE id=?", (sub_id,))
         conn.commit()
-    await call.answer("Видалено", show_alert=True)
+
+    # Локализованное подтверждение удаления (fallback на русский/украинский текст)
+    try:
+        await call.answer(get_text(lang, 'deleted'), show_alert=True)
+    except Exception:
+        await call.answer("Видалено", show_alert=True)
+
+    # Обновляем планировщик чтобы удалить устаревшие job'ы для удалённой подписки
+    try:
+        from main import scheduler
+        from services.scheduler import rebuild_jobs
+        await rebuild_jobs(call.bot, scheduler)
+    except Exception as e:
+        # Логируем, но не ломаем работу бота
+        print("Failed to rebuild scheduler after subscription delete:", e)
+
     try:
         await call.message.delete()
     except Exception:
@@ -301,4 +318,5 @@ def register_handlers(dp: Dispatcher):
 
     # Видалення
     dp.register_callback_query_handler(delete_sub, lambda c: c.data and c.data.startswith('del_'))
+
 
