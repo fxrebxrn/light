@@ -108,18 +108,42 @@ async def back_to_comp(call: types.CallbackQuery):
 
 async def save_sub(call: types.CallbackQuery, callback_data: dict):
     lang = get_user_lang(call.from_user.id)
-    comp, q = callback_data['val'].split("_")
+    # Отримуємо компанію та чергу з callback_data
+    val = callback_data['val'].split("_")
+    comp = val[0]
+    q = val[1]
+    
     with get_db() as conn:
         try:
-            conn.execute("INSERT INTO users (user_id, company, queue) VALUES (?,?,?)", (call.from_user.id, comp, q))
+            # Перевіряємо, чи немає вже такого запису (про всяк випадок)
+            check = conn.execute(
+                "SELECT id FROM users WHERE user_id = ? AND company = ? AND queue = ?", 
+                (call.from_user.id, comp, q)
+            ).fetchone()
+            
+            if check:
+                await call.answer(get_text(lang, 'exists'), show_alert=True)
+                return
+
+            # Додаємо підписку
+            conn.execute(
+                "INSERT INTO users (user_id, company, queue) VALUES (?, ?, ?)", 
+                (call.from_user.id, comp, q)
+            )
             conn.commit()
-            await call.answer(get_text(lang, 'added'), show_alert=True)
-        except Exception:
+            
+            # ВИПРАВЛЕНО: передаємо змінні у текст
+            msg_text = get_text(lang, 'added').format(company=comp, queue=q)
+            await call.answer(msg_text, show_alert=True)
+            
+            # Оновлюємо планировщик, щоб він додав завдання для нової черги
+            from main import scheduler
+            from services.scheduler import rebuild_jobs
+            await rebuild_jobs(call.bot, scheduler)
+            
+        except Exception as e:
+            print(f"Database error: {e}")
             await call.answer(get_text(lang, 'exists'), show_alert=True)
-    try:
-        await call.answer()
-    except Exception:
-        pass
 
 async def show_sched(call: types.CallbackQuery, callback_data: dict):
     comp, q = callback_data['comp'], callback_data['queue']
@@ -277,3 +301,4 @@ def register_handlers(dp: Dispatcher):
 
     # Видалення
     dp.register_callback_query_handler(delete_sub, lambda c: c.data and c.data.startswith('del_'))
+
