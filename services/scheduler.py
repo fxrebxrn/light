@@ -1,10 +1,43 @@
-import pytz
-from datetime import datetime, timedelta
-from database.db import get_db
+# --- ВАЖНО: ИМПОРТЫ В НАЧАЛЕ ФАЙЛА ---
+from aiogram import Dispatcher, types
+from aiogram.utils.callback_data import CallbackData
+from database.db import get_db, get_user_settings, set_user_setting
+import config
 from locales.strings import get_text
+from datetime import datetime
+import pytz
 
-# Принудительная часовая зона
+# Часовой пояс Киева
 UA_TZ = pytz.timezone('Europe/Kyiv')
+
+cb_lang = CallbackData("lang", "code")
+cb_menu = CallbackData("menu", "action", "val")
+cb_sched = CallbackData("sched", "comp", "queue")
+cb_notify = CallbackData("notify", "key", "val")
+
+# --- УДАЛЕНИЕ ПОДПИСКИ (ИСПРАВЛЕНО) ---
+async def delete_sub(call: types.CallbackQuery):
+    try:
+        sub_id = call.data.split("_", 1)[1]
+    except Exception:
+        await call.answer("Невірні дані", show_alert=True)
+        return
+
+    with get_db() as conn:
+        conn.execute("DELETE FROM users WHERE id=?", (sub_id,))
+        conn.commit()
+
+    # 🔥 ВОТ ЭТО ИСПРАВЛЕНИЕ
+    from main import scheduler
+    from services.scheduler import rebuild_jobs
+    await rebuild_jobs(call.bot, scheduler)
+
+    await call.answer("Видалено", show_alert=True)
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
 
 async def send_reminder(bot, user_id, company, queue, action, lang):
     """Отправляет напоминание пользователю."""
@@ -88,3 +121,4 @@ async def rebuild_jobs(bot, scheduler):
                 # печатаем информацию, чтобы не ломать запуск
                 print("Error scheduling jobs for schedule row:", dict(sched))
                 print(e)
+
