@@ -67,7 +67,7 @@ async def set_language(call: types.CallbackQuery, callback_data: dict):
         await call.message.edit_text(get_text(lang, 'lang_set'))
     except Exception:
         await call.message.answer(get_text(lang, 'lang_set'))
-    await call.message.answer(get_text(lang, 'sub_recommend'), reply_markup=kb)
+    await call.message.answer(get_text(lang, 'sub_recommend'), reply_markup=kb, disable_web_page_preview=True)
     await call.answer()
 
 async def show_main_menu(call: types.CallbackQuery):
@@ -166,11 +166,29 @@ async def delete_sub(call: types.CallbackQuery):
 async def support_cmd(message: types.Message):
     lang = get_user_lang(message.from_user.id)
     # Подставим SUPPORT_USER и DONATE_URL
-    await message.answer(get_text(lang, 'support_text', user=config.SUPPORT_USER, url=config.DONATE_URL))
+    await message.answer(get_text(lang, 'support_text', user=config.SUPPORT_USER, url=config.DONATE_URL), disable_web_page_preview=True, parse_mode=types.ParseMode.HTML)
 
 async def settings_cmd(message: types.Message):
     lang = get_user_lang(message.from_user.id)
-    await message.answer(get_text(lang, 'settings_text'))
+    # Отправляем текст настроек и кнопку "Змінити мову" (используем локализованный лейбл btn_lang_switch)
+    kb = types.InlineKeyboardMarkup().add(
+        types.InlineKeyboardButton(get_text(lang, 'btn_lang_switch'), callback_data="open_lang")
+    )
+    await message.answer(get_text(lang, 'settings_text'), reply_markup=kb)
+
+# Новый callback для открытия меню смены языка
+async def open_language_menu(call: types.CallbackQuery):
+    lang = get_user_lang(call.from_user.id)
+    # отправляем сообщение с выбором языка (inline keyboard)
+    try:
+        await call.message.answer(get_text(lang, 'select_lang'), reply_markup=lang_kb())
+    except Exception:
+        # если нельзя отправить ответ к тому сообщению, просто редактируем (fallback)
+        try:
+            await call.message.edit_text(get_text(lang, 'select_lang'), reply_markup=lang_kb())
+        except Exception:
+            pass
+    await call.answer()
 
 # --- Реєстрація ---
 def register_handlers(dp: Dispatcher):
@@ -194,6 +212,9 @@ def register_handlers(dp: Dispatcher):
     dp.register_callback_query_handler(handle_comp_selection, lambda c: c.data and c.data.startswith(('vcomp_', 'scomp_')))
     dp.register_callback_query_handler(show_sched, cb_sched.filter())
     dp.register_callback_query_handler(save_sub, cb_menu.filter(action="save"))
+
+    # Обработчик открытия меню смены языка
+    dp.register_callback_query_handler(open_language_menu, text="open_lang")
 
     # Назад
     dp.register_callback_query_handler(back_to_comp, text=["back_view", "back_sub"])
