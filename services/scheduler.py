@@ -1,17 +1,14 @@
-import asyncio
 import pytz
 from datetime import datetime, timedelta
 from database.db import get_db
 from locales.strings import get_text
 
-# Примусовий часовий пояс
+# Принудительная часовая зона
 UA_TZ = pytz.timezone('Europe/Kyiv')
 
 async def send_reminder(bot, user_id, company, queue, action, lang):
-    """Надсилає нагадування користувачу"""
-    # action может быть:
-    #  - 'off' / 'on'         -> reminder за 10 минут (ключ: reminder_off / reminder_on)
-    #  - 'off_now' / 'on_now' -> уведомление в момент события (ключ: off_now / on_now)
+    """Отправляет напоминание пользователю."""
+    # action может быть: 'off'/'on' (reminder за 10 минут) или 'off_now'/'on_now' (уведомление в момент события)
     if action in ('off', 'on'):
         key = f'reminder_{action}'
     else:
@@ -20,37 +17,38 @@ async def send_reminder(bot, user_id, company, queue, action, lang):
     try:
         await bot.send_message(user_id, text)
     except Exception as e:
-        print(f"Помилка відправки нагадування {user_id}: {e}")
+        print(f"Ошибка отправки напоминания {user_id}: {e}")
 
 async def rebuild_jobs(bot, scheduler):
-    """Перебудовує всі завдання планувальника"""
+    """Перестраивает все задания планировщика."""
     try:
         scheduler.remove_all_jobs()
     except Exception:
         pass
 
-    # Поточний час у Києві
     now_ua = datetime.now(UA_TZ)
     today_str = now_ua.strftime('%Y-%m-%d')
 
     with get_db() as conn:
-        # Беремо графіки на сьогодні та майбутні дати
         schedules = conn.execute("SELECT * FROM schedules WHERE date >= ?", (today_str,)).fetchall()
 
         for sched in schedules:
-            date_str = sched['date']
-            # Заміна 24:00 для сумісності з datetime
-            off_time_str = (sched.get('off_time') or '').replace('24:00', '23:59')
-            on_time_str = (sched.get('on_time') or '').replace('24:00', '23:59')
-
             try:
-                # Створюємо об'єкти часу з прив'язкою до Києва
+                date_str = sched['date']
+                off_time_raw = sched['off_time'] or ''
+                on_time_raw = sched['on_time'] or ''
+
+                # Заменяем '24:00' на '23:59' для корректного парсинга
+                off_time_str = off_time_raw.replace('24:00', '23:59')
+                on_time_str = on_time_raw.replace('24:00', '23:59')
+
+                # Парсим datetime (в локальном Kyiv tz)
                 off_dt_naive = datetime.strptime(f"{date_str} {off_time_str}", '%Y-%m-%d %H:%M')
                 on_dt_naive = datetime.strptime(f"{date_str} {on_time_str}", '%Y-%m-%d %H:%M')
                 off_t = UA_TZ.localize(off_dt_naive)
                 on_t = UA_TZ.localize(on_dt_naive)
 
-                # Знаходимо підписаних юзерів + їх prefs (используем COALESCE чтобы дефолт был 1)
+                # Получаем подписанных пользователей вместе с их prefs
                 users = conn.execute(
                     "SELECT u.user_id, COALESCE(p.language, 'uk') as language, "
                     "COALESCE(p.notify_off, 1) as notify_off, COALESCE(p.notify_on, 1) as notify_on, "
@@ -64,27 +62,29 @@ async def rebuild_jobs(bot, scheduler):
                     user_id = user['user_id']
                     lang = user['language'] or 'uk'
 
-                    # Нагадування про вимкнення (за 10 хв)
+                    # Напоминание о выключении за 10 минут
                     rem_off = off_t - timedelta(minutes=10)
                     if rem_off > now_ua and int(user['notify_off_10']) == 1:
                         scheduler.add_job(send_reminder, 'date', run_date=rem_off,
                                           args=[bot, user_id, sched['company'], sched['queue'], 'off', lang])
 
-                    # Уведомление в момент вимкнення
+                    # Уведомление в момент выключения
                     if off_t > now_ua and int(user['notify_off']) == 1:
                         scheduler.add_job(send_reminder, 'date', run_date=off_t,
                                           args=[bot, user_id, sched['company'], sched['queue'], 'off_now', lang])
 
-                    # Нагадування про ввімкнення (за 10 хв)
+                    # Напоминание о включении за 10 минут
                     rem_on = on_t - timedelta(minutes=10)
                     if rem_on > now_ua and int(user['notify_on_10']) == 1:
                         scheduler.add_job(send_reminder, 'date', run_date=rem_on,
                                           args=[bot, user_id, sched['company'], sched['queue'], 'on', lang])
 
-                    # Уведомление в момент ввімкнення
+                    # Уведомление в момент включения
                     if on_t > now_ua and int(user['notify_on']) == 1:
                         scheduler.add_job(send_reminder, 'date', run_date=on_t,
                                           args=[bot, user_id, sched['company'], sched['queue'], 'on_now', lang])
 
             except Exception as e:
-                print("Error scheduling jobs for", sched, e)
+                # печатаем информацию, чтобы не ломать запуск
+                print("Error scheduling jobs for schedule row:", dict(sched))
+                print(e)
