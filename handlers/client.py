@@ -1,6 +1,6 @@
 from aiogram import Dispatcher, types
 from aiogram.utils.callback_data import CallbackData
-from database.db import get_db
+from database.db import get_db, get_user_settings, set_user_setting
 import config
 from locales.strings import get_text
 from datetime import datetime
@@ -13,6 +13,7 @@ UA_TZ = pytz.timezone('Europe/Kyiv')
 cb_lang = CallbackData("lang", "code")
 cb_menu = CallbackData("menu", "action", "val")
 cb_sched = CallbackData("sched", "comp", "queue")
+cb_notify = CallbackData("notify", "key", "val")  # key: notify_off / notify_on / notify_off_10 / notify_on_10 ; val: current
 
 def get_user_lang(user_id):
     with get_db() as conn:
@@ -38,7 +39,6 @@ def queues_kb(action_type, company, lang):
     kb = types.InlineKeyboardMarkup(row_width=3)
     btns = []
     for q in queues:
-        # При сохранении используем '_' как разделитель (как в original)
         if action_type == 'view':
             btns.append(types.InlineKeyboardButton(q, callback_data=cb_sched.new(comp=company, queue=q)))
         else:
@@ -62,7 +62,6 @@ async def set_language(call: types.CallbackQuery, callback_data: dict):
         conn.execute("INSERT OR REPLACE INTO user_prefs (user_id, language) VALUES (?, ?)", (call.from_user.id, lang))
         conn.commit()
     kb = types.InlineKeyboardMarkup().add(types.InlineKeyboardButton(get_text(lang, 'sub_btn'), url=config.CHANNEL_URL)).add(types.InlineKeyboardButton(get_text(lang, 'continue_btn'), callback_data="menu_start"))
-    # Попытка редактирования сообщения; если не получается — отправим новый
     try:
         await call.message.edit_text(get_text(lang, 'lang_set'))
     except Exception:
@@ -87,7 +86,6 @@ async def add_queue_btn(message: types.Message):
 
 async def handle_comp_selection(call: types.CallbackQuery):
     lang = get_user_lang(call.from_user.id)
-    # Ожидаем формат vcomp_ДТЕК или scomp_ДТЕК
     try:
         action, comp = call.data.split("_", 1)
     except Exception:
@@ -118,7 +116,6 @@ async def save_sub(call: types.CallbackQuery, callback_data: dict):
             await call.answer(get_text(lang, 'added'), show_alert=True)
         except Exception:
             await call.answer(get_text(lang, 'exists'), show_alert=True)
-    # Уже ответили с show_alert, но удостоверимся, что callback закрыт
     try:
         await call.answer()
     except Exception:
@@ -165,29 +162,84 @@ async def delete_sub(call: types.CallbackQuery):
 
 async def support_cmd(message: types.Message):
     lang = get_user_lang(message.from_user.id)
-    # Подставим SUPPORT_USER и DONATE_URL
     await message.answer(get_text(lang, 'support_text', user=config.SUPPORT_USER, url=config.DONATE_URL), disable_web_page_preview=True, parse_mode=types.ParseMode.HTML)
 
+# --- Settings and Notifications handlers ---
 async def settings_cmd(message: types.Message):
     lang = get_user_lang(message.from_user.id)
-    # Отправляем текст настроек и кнопку "Змінити мову" (используем локализованный лейбл btn_lang_switch)
-    kb = types.InlineKeyboardMarkup().add(
-        types.InlineKeyboardButton(get_text(lang, 'btn_lang_switch'), callback_data="open_lang")
-    )
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'btn_lang_switch'), callback_data="open_lang"))
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'btn_notifications'), callback_data="open_notifications"))
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'btn_toggle_all'), callback_data="toggle_all"))
     await message.answer(get_text(lang, 'settings_text'), reply_markup=kb)
 
-# Новый callback для открытия меню смены языка
 async def open_language_menu(call: types.CallbackQuery):
     lang = get_user_lang(call.from_user.id)
-    # отправляем сообщение с выбором языка (inline keyboard)
     try:
         await call.message.answer(get_text(lang, 'select_lang'), reply_markup=lang_kb())
     except Exception:
-        # если нельзя отправить ответ к тому сообщению, просто редактируем (fallback)
         try:
             await call.message.edit_text(get_text(lang, 'select_lang'), reply_markup=lang_kb())
         except Exception:
             pass
+    await call.answer()
+
+async def open_notifications(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    settings = get_user_settings(user_id)
+    lang = settings['language']
+
+    def state_emoji(v): return "✅" if int(v) == 1 else "❌"
+
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton(f"{get_text(lang, 'notif_label_off')}: {state_emoji(settings['notify_off'])}", callback_data=cb_notify.new(key='notify_off', val=settings['notify_off'])))
+    kb.add(types.InlineKeyboardButton(f"{get_text(lang, 'notif_label_on')}: {state_emoji(settings['notify_on'])}", callback_data=cb_notify.new(key='notify_on', val=settings['notify_on'])))
+    kb.add(types.InlineKeyboardButton(f"{get_text(lang, 'notif_label_off_10')}: {state_emoji(settings['notify_off_10'])}", callback_data=cb_notify.new(key='notify_off_10', val=settings['notify_off_10'])))
+    kb.add(types.InlineKeyboardButton(f"{get_text(lang, 'notif_label_on_10')}: {state_emoji(settings['notify_on_10'])}", callback_data=cb_notify.new(key='notify_on_10', val=settings['notify_on_10'])))
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'back'), callback_data="open_settings_back"))
+    try:
+        await call.message.edit_text(get_text(lang, 'notifications_text'), reply_markup=kb)
+    except Exception:
+        await call.message.answer(get_text(lang, 'notifications_text'), reply_markup=kb)
+    await call.answer()
+
+async def toggle_notify(call: types.CallbackQuery, callback_data: dict):
+    user_id = call.from_user.id
+    key = callback_data['key']
+    try:
+        current = int(callback_data['val'])
+    except Exception:
+        current = get_user_settings(user_id).get(key, 1)
+    new = 0 if current == 1 else 1
+    set_user_setting(user_id, key, new)
+    # Обновим меню уведомлений
+    await open_notifications(call)
+
+async def toggle_all_notify(call: types.CallbackQuery):
+    user_id = call.from_user.id
+    settings = get_user_settings(user_id)
+    any_enabled = any([settings['notify_off'], settings['notify_on'], settings['notify_off_10'], settings['notify_on_10']])
+    new = 0 if any_enabled else 1
+    for k in ['notify_off', 'notify_on', 'notify_off_10', 'notify_on_10']:
+        set_user_setting(user_id, k, new)
+    lang = get_user_lang(user_id)
+    state_text = "ON" if new == 1 else "OFF"
+    try:
+        await call.answer(get_text(lang, 'notif_all_set', state=state_text), show_alert=False)
+    except Exception:
+        await call.answer("OK", show_alert=False)
+    await open_notifications(call)
+
+async def back_to_settings_from_notifications(call: types.CallbackQuery):
+    lang = get_user_lang(call.from_user.id)
+    kb = types.InlineKeyboardMarkup(row_width=1)
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'btn_lang_switch'), callback_data="open_lang"))
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'btn_notifications'), callback_data="open_notifications"))
+    kb.add(types.InlineKeyboardButton(get_text(lang, 'btn_toggle_all'), callback_data="toggle_all"))
+    try:
+        await call.message.edit_text(get_text(lang, 'settings_text'), reply_markup=kb)
+    except Exception:
+        await call.message.answer(get_text(lang, 'settings_text'), reply_markup=kb)
     await call.answer()
 
 # --- Реєстрація ---
@@ -212,9 +264,13 @@ def register_handlers(dp: Dispatcher):
     dp.register_callback_query_handler(handle_comp_selection, lambda c: c.data and c.data.startswith(('vcomp_', 'scomp_')))
     dp.register_callback_query_handler(show_sched, cb_sched.filter())
     dp.register_callback_query_handler(save_sub, cb_menu.filter(action="save"))
-
-    # Обработчик открытия меню смены языка
     dp.register_callback_query_handler(open_language_menu, text="open_lang")
+
+    # Notifications callbacks
+    dp.register_callback_query_handler(open_notifications, text="open_notifications")
+    dp.register_callback_query_handler(toggle_notify, cb_notify.filter())
+    dp.register_callback_query_handler(toggle_all_notify, text="toggle_all")
+    dp.register_callback_query_handler(back_to_settings_from_notifications, text="open_settings_back")
 
     # Назад
     dp.register_callback_query_handler(back_to_comp, text=["back_view", "back_sub"])
